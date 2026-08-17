@@ -1,9 +1,5 @@
 """
-Database engine — works for both Postgres (production) and SQLite (demo).
-
-DATABASE_URL forms accepted:
-  * "postgresql+psycopg2://..."  → Postgres with statement_timeout
-  * "sqlite:///path/to/db.db"   → SQLite, no statement_timeout
+Database engine — Postgres (production) or SQLite (local demo).
 """
 import os
 from sqlalchemy import create_engine
@@ -20,12 +16,15 @@ if _is_sqlite:
         connect_args={"check_same_thread": False},
     )
 else:
+    # NOTE: no statement_timeout here. On Render's free Postgres, a 3-sec
+    # cutoff was killing legitimate ILIKE searches across 165k+ Cyrillic
+    # rows, returning 500s. The risk of a runaway query is small; if needed,
+    # raise an issue and we'll add timeouts per-endpoint instead.
     engine = create_engine(
         DATABASE_URL,
         pool_pre_ping=True,
         pool_size=10,
         max_overflow=20,
-        connect_args={"options": "-c statement_timeout=3000"},
     )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
