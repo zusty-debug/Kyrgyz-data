@@ -346,6 +346,7 @@ def run_import(
           f"file: {file_path}  batch: {batch_size}")
     start = time.time()
     imported = 0
+    already = 0
     skipped = 0
     batch = []
 
@@ -361,13 +362,17 @@ def run_import(
                     continue
                 batch.append(rec.to_row())
                 if len(batch) >= batch_size:
-                    imported += flush(eng, batch)
+                    n_new, n_already = flush(eng, batch)
+                    imported += n_new
+                    already += n_already
                     batch.clear()
-                    if imported % log_every == 0:
+                    processed = imported + already
+                    if processed // log_every > (processed - batch_size) // log_every:
                         elapsed = time.time() - start
-                        rate = imported / max(elapsed, 0.001)
-                        print(f"  imported={imported:,}  skipped={skipped:,}  "
-                              f"rate={rate:,.0f}/s")
+                        rate = processed / max(elapsed, 0.001)
+                        print(f"  new={imported:,}  already={already:,}  "
+                              f"seen={processed:,}  "
+                              f"malformed={skipped:,}  rate={rate:,.0f}/s")
             if batch:
                 n_new, n_already = flush(eng, batch)
                 imported += n_new
@@ -378,9 +383,10 @@ def run_import(
     elapsed = time.time() - start
     print("-" * 50)
     print(f"DONE in {elapsed:.1f}s")
-    print(f"  imported         : {imported:,}")
-    print(f"  skipped/malformed: {skipped:,}")
-    print(f"  malformed log    : {malformed_log}")
+    print(f"  new rows inserted : {imported:,}")
+    print(f"  already in DB     : {already:,}")
+    print(f"  malformed/skipped : {skipped:,}")
+    print(f"  malformed log     : {malformed_log}")
 
 
 def main():
