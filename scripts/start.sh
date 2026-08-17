@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Container start: init DB schema, first-boot import (if DATA_URL set),
 # then run uvicorn. Idempotent across restarts.
+# Uses Python urllib for downloads (no curl/wget dependency on slim images).
 
 cd /app
 
@@ -14,7 +15,6 @@ echo "[start] $(date -u) — initialising DB schema"
 python -m app.init_db || echo "[start] init_db returned non-zero, continuing"
 
 # Optional first-boot import from a public URL.
-# Only triggers when the people table is empty.
 if [ -n "${DATA_URL:-}" ]; then
   echo "[start] DATA_URL is set"
   ROW_COUNT=$(python -c "from app.database import engine; from sqlalchemy import text; \
@@ -23,12 +23,41 @@ if [ -n "${DATA_URL:-}" ]; then
   if [ "${ROW_COUNT}" = "0" ]; then
     echo "[start] DB empty — downloading TXT from ${DATA_URL}"
     mkdir -p /app/data
-    curl -fsSL --retry 5 --retry-delay 5 -o /app/data/data.txt "${DATA_URL}" || echo "[start] download failed, will retry by uvicorn-startup"
+    python - <<PYEOF || echo "[start] download failed"
+import os, sys, urllib.request, time
+url = os.environ["DATA_URL"]
+out = "/app/data/data.txt"
+print(f"[download] GET {url}", flush=True)
+for attempt in range(1, 6):
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "kyrgyz-data-deploy/1.0"})
+        with urllib.request.urlopen(req, timeout=300) as r, open(out, "wb") as f:
+            total = 0
+            t0 = time.time()
+            while True:
+                chunk = r.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+                total += len(chunk)
+            dt = time.time() - t0
+        size = os.path.getsize(out)
+        print(f"[download] saved {size} bytes in {dt:.1f}s", flush=True)
+        sys.exit(0)
+    except Exception as e:
+        print(f"[download] attempt {attempt}/5 failed: {e}", flush=True)
+        time.sleep(5)
+sys.exit(1)
+PYEOF
+
     if [ -s /app/data/data.txt ]; then
-      echo "[start] downloaded $(wc -c < /app/data/data.txt) bytes; importing"
-      python -m importer.import_txt --file /app/data/data.txt --flush auto --batch 5000 || \
-        echo "[start] import exited non-zero"
+      SIZE=$(wc -c < /app/data/data.txt)
+      echo "[start] downloaded ${SIZE} bytes; importing"
+      python -m importer.import_txt --file /app/data/data.txt --flush auto --batch 5000 \
+        || echo "[start] import exited non-zero"
       echo "[start] import finished"
+    else
+      echo "[start] data file is empty or missing, skipping import"
     fi
   fi
 fi
