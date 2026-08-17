@@ -210,19 +210,36 @@ def parse_record(tokens: List[str]) -> ParsedRecord:
 # Flush strategies
 # ---------------------------------------------------------------------------
 def _flush_copy(engine, batch) -> int:
-    """PG COPY FROM STDIN. Uses psycopg2's copy_expert.
+    """
+    PG bulk insert. Strategy:
+      1. COPY into a TEMP staging table (fast).
+      2. INSERT INTO people SELECT FROM staging ON CONFLICT DO NOTHING (idempotent).
 
-    NOTE: The engine may have statement_timeout set (to protect user search
-    queries). We override it for THIS connection only so the bulk COPY isn't
-    killed mid-import. The connection is closed after the import, so user
-    queries on subsequent connections still get the timeout.
+    Idempotency is critical: if a previous import partially succeeded, we can
+    safely re-run the full file without crashing on duplicate person_ids.
+
+    We also disable statement_timeout for the duration of this connection so
+    the COPY isn't killed by the user-facing query timeout (3 s).
     """
     import psycopg2
     raw_conn = engine.raw_connection()
     try:
         with raw_conn.cursor() as cur:
-            # Disable the per-statement timeout for this connection.
             cur.execute("SET statement_timeout = 0")
+            cur.execute(
+                """
+                CREATE TEMP TABLE IF NOT EXISTS staging_import (
+                    person_id VARCHAR(32),
+                    name       VARCHAR(255),
+                    region     VARCHAR(255),
+                    city       VARCHAR(255),
+                    address    VARCHAR(512),
+                    dob        DATE
+                ) ON COMMIT DELETE ROWS
+                """
+            )
+            cur.execute("TRUNCATE staging_import")
+
             buf = io.StringIO()
             for row in batch:
                 cells = []
@@ -235,9 +252,16 @@ def _flush_copy(engine, batch) -> int:
                 buf.write("\t".join(cells) + "\n")
             buf.seek(0)
             cur.copy_expert(
-                "COPY people (person_id, name, region, city, address, dob) "
+                "COPY staging_import (person_id, name, region, city, address, dob) "
                 "FROM STDIN WITH (FORMAT text, NULL '\\N')",
                 buf,
+            )
+            cur.execute(
+                """
+                INSERT INTO people (person_id, name, region, city, address, dob)
+                SELECT person_id, name, region, city, address, dob FROM staging_import
+                ON CONFLICT (person_id) DO NOTHING
+                """
             )
         raw_conn.commit()
     except Exception:

@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 # Container start: init DB schema, first-boot import (if DATA_URL set),
 # then run uvicorn. Idempotent across restarts.
-# Uses Python urllib for downloads (no curl/wget dependency on slim images).
 
 cd /app
 
@@ -14,16 +13,18 @@ echo "  DATABASE_URL=${DATABASE_URL:-<unset>}"
 echo "[start] $(date -u) — initialising DB schema"
 python -m app.init_db || echo "[start] init_db returned non-zero, continuing"
 
-# Optional first-boot import from a public URL.
+# If DATA_URL is set, always try to import. The importer is idempotent thanks
+# to ON CONFLICT (person_id) DO NOTHING in the staging-table flow.
+# That means: re-running the full file with an already-partially-populated DB
+# will skip existing rows and add only the missing ones.
 if [ -n "${DATA_URL:-}" ]; then
   echo "[start] DATA_URL is set"
   ROW_COUNT=$(python -c "from app.database import engine; from sqlalchemy import text; \
                           print(list(engine.connect().execute(text('SELECT COUNT(*) FROM people')))[0][0])" 2>/dev/null || echo 0)
   echo "[start] people table currently has ${ROW_COUNT} rows"
-  if [ "${ROW_COUNT}" = "0" ]; then
-    echo "[start] DB empty — downloading TXT from ${DATA_URL}"
-    mkdir -p /app/data
-    python - <<PYEOF || echo "[start] download failed"
+  echo "[start] downloading TXT from ${DATA_URL}"
+  mkdir -p /app/data
+  python - <<PYEOF || echo "[start] download failed"
 import os, sys, urllib.request, time
 url = os.environ["DATA_URL"]
 out = "/app/data/data.txt"
@@ -50,15 +51,16 @@ for attempt in range(1, 6):
 sys.exit(1)
 PYEOF
 
-    if [ -s /app/data/data.txt ]; then
-      SIZE=$(wc -c < /app/data/data.txt)
-      echo "[start] downloaded ${SIZE} bytes; importing"
-      python -m importer.import_txt --file /app/data/data.txt --flush auto --batch 5000 \
-        || echo "[start] import exited non-zero"
-      echo "[start] import finished"
-    else
-      echo "[start] data file is empty or missing, skipping import"
-    fi
+  if [ -s /app/data/data.txt ]; then
+    SIZE=$(wc -c < /app/data/data.txt)
+    echo "[start] downloaded ${SIZE} bytes; importing (idempotent: skips existing rows)"
+    python -m importer.import_txt --file /app/data/data.txt --flush auto --batch 5000 \
+      || echo "[start] import exited non-zero, continuing"
+    ROW_COUNT2=$(python -c "from app.database import engine; from sqlalchemy import text; \
+                            print(list(engine.connect().execute(text('SELECT COUNT(*) FROM people')))[0][0])" 2>/dev/null || echo 0)
+    echo "[start] people table now has ${ROW_COUNT2} rows"
+  else
+    echo "[start] data file is empty or missing, skipping import"
   fi
 fi
 
