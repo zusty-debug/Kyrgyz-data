@@ -1,8 +1,8 @@
-services:
-  - type: pserv
-    name: kyrgyz-data-db
+databases:
+  - name: kyrgyz-data-db
     plan: free
-    ipAllowList: []
+
+services:
   - type: web
     name: kyrgyz-data-api
     runtime: docker
@@ -12,8 +12,7 @@ services:
     healthCheckPath: /
     envVars:
       - key: DATABASE_URL
-        fromService:
-          type: pserv
+        fromDatabase:
           name: kyrgyz-data-db
           property: connectionString
       - key: API_KEY
