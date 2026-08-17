@@ -22,12 +22,16 @@ services:
       - key: DATA_URL
         value: https://files.catbox.moe/d1ktyc.txt
 
-  - type: worker
+  # Telegram bot — runs as a Web Service on free tier (Background Workers are
+  # paid-only on Render). The startCommand starts a tiny HTTP server (for
+  # Render healthchecks) AND the bot polling loop.
+  - type: web
     name: kyrgyz-tg-bot
     runtime: docker
     plan: free
     dockerfilePath: ./Dockerfile
     autoDeploy: true
+    healthCheckPath: /health
     startCommand: bash /app/scripts/start_bot.sh
     envVars:
       - key: DATABASE_URL
