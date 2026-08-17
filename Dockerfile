@@ -11,19 +11,18 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the four code packages
+# Copy the three code packages
 COPY ./app        /app/app
-COPY ./bot        /app/bot
 COPY ./importer   /app/importer
 COPY ./scripts    /app/scripts
 
-# Make sure the start scripts are executable
-RUN chmod +x /app/scripts/start.sh /app/scripts/start_bot.sh
+# Make sure the start script is executable
+RUN chmod +x /app/scripts/start.sh && ls -la /app/scripts/start.sh
 
 # Pre-create data directory for the downloaded TXT
 RUN mkdir -p /app/data
 
 EXPOSE 8000
 
-# Default CMD runs the API (uvicorn). Render workers override this via startCommand.
+# Run via bash so we never depend on the executable bit
 CMD ["bash", "/app/scripts/start.sh"]
