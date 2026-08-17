@@ -209,17 +209,9 @@ def parse_record(tokens: List[str]) -> ParsedRecord:
 # ---------------------------------------------------------------------------
 # Flush strategies
 # ---------------------------------------------------------------------------
-def _flush_copy(engine, batch) -> int:
+def _flush_copy(engine, batch) -> Tuple[int, int]:
     """
-    PG bulk insert. Strategy:
-      1. COPY into a TEMP staging table (fast).
-      2. INSERT INTO people SELECT FROM staging ON CONFLICT DO NOTHING (idempotent).
-
-    Idempotency is critical: if a previous import partially succeeded, we can
-    safely re-run the full file without crashing on duplicate person_ids.
-
-    We also disable statement_timeout for the duration of this connection so
-    the COPY isn't killed by the user-facing query timeout (3 s).
+    PG bulk insert. Returns (new_rows, already_present_rows).
     """
     import psycopg2
     raw_conn = engine.raw_connection()
@@ -256,20 +248,31 @@ def _flush_copy(engine, batch) -> int:
                 "FROM STDIN WITH (FORMAT text, NULL '\\N')",
                 buf,
             )
+            # Get counts: how many rows from staging are NEW vs already in people.
             cur.execute(
                 """
-                INSERT INTO people (person_id, name, region, city, address, dob)
-                SELECT person_id, name, region, city, address, dob FROM staging_import
-                ON CONFLICT (person_id) DO NOTHING
+                WITH src AS (
+                  SELECT person_id, name, region, city, address, dob FROM staging_import
+                ),
+                inserted AS (
+                  INSERT INTO people (person_id, name, region, city, address, dob)
+                  SELECT * FROM src
+                  ON CONFLICT (person_id) DO NOTHING
+                  RETURNING 1
+                )
+                SELECT
+                  (SELECT COUNT(*) FROM inserted) AS new_rows,
+                  (SELECT COUNT(*) FROM src) - (SELECT COUNT(*) FROM inserted) AS already
                 """
             )
+            new_rows, already = cur.fetchone()
         raw_conn.commit()
     except Exception:
         raw_conn.rollback()
         raise
     finally:
         raw_conn.close()
-    return len(batch)
+    return int(new_rows), int(already)
 
 
 def _flush_sqlite(engine, batch) -> int:
@@ -366,7 +369,9 @@ def run_import(
                         print(f"  imported={imported:,}  skipped={skipped:,}  "
                               f"rate={rate:,.0f}/s")
             if batch:
-                imported += flush(eng, batch)
+                n_new, n_already = flush(eng, batch)
+                imported += n_new
+                already += n_already
     finally:
         bad.close()
 
