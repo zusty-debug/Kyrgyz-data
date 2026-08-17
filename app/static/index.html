@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>People Search</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 0;
+    background: #0f172a; color: #e2e8f0;
+    min-height: 100vh;
+  }
+  header {
+    background: #1e293b; padding: 18px 16px;
+    border-bottom: 1px solid #334155;
+    display: flex; align-items: center; gap: 10px;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .dot {
+    width: 10px; height: 10px; border-radius: 50%;
+    background: #22c55e; box-shadow: 0 0 8px #22c55e;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px; }
+  .card {
+    background: #1e293b; border: 1px solid #334155;
+    border-radius: 12px; padding: 16px; margin-bottom: 16px;
+  }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  label {
+    display: block; font-size: 12px; color: #94a3b8;
+    margin-bottom: 4px; text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  input {
+    width: 100%; padding: 10px 12px;
+    background: #0f172a; color: #e2e8f0;
+    border: 1px solid #334155; border-radius: 8px;
+    font-size: 15px;
+  }
+  input:focus { outline: none; border-color: #3b82f6; }
+  .field { flex: 1 1 160px; min-width: 140px; }
+  button {
+    background: #3b82f6; color: white; border: none;
+    padding: 12px 22px; border-radius: 8px; font-size: 16px;
+    font-weight: 500; cursor: pointer; min-height: 44px;
+  }
+  button.secondary { background: #475569; }
+  button:active { transform: translateY(1px); }
+  .pill {
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    background: #334155; font-size: 12px; margin-right: 6px;
+  }
+  .sticky-key {
+    position: sticky; top: 0; z-index: 10;
+    background: #0f172a; padding: 10px 16px;
+    border-bottom: 1px solid #1e293b;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .sticky-key input { flex: 1; font-size: 13px; padding: 8px; }
+  #status {
+    text-align: center; padding: 4px 8px; border-radius: 6px;
+    font-size: 12px; min-width: 80px;
+  }
+  #status.ok { background: #16a34a; }
+  #status.err { background: #dc2626; }
+  .result {
+    background: #0f172a; border: 1px solid #334155;
+    border-radius: 10px; padding: 14px; margin-bottom: 10px;
+  }
+  .result .pid { color: #60a5fa; font-family: monospace; font-size: 13px; }
+  .result .nm { font-size: 17px; font-weight: 600; margin: 4px 0; }
+  .result .meta { font-size: 13px; color: #94a3b8; line-height: 1.5; }
+  summary { cursor: pointer; font-size: 14px; color: #94a3b8; padding: 8px 0; }
+  details pre {
+    background: #020617; padding: 10px; border-radius: 6px;
+    overflow: auto; font-size: 11px; max-height: 240px;
+  }
+  #summary {
+    color: #94a3b8; font-size: 13px; padding: 8px 0;
+  }
+  .examples {
+    display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
+  }
+  .ex {
+    background: #334155; padding: 6px 12px; border-radius: 999px;
+    font-size: 13px; cursor: pointer; border: 1px solid #475569;
+  }
+  .ex:active { background: #475569; }
+</style>
+</head>
+<body>
+
+<header>
+  <span class="dot"></span>
+  <h1>People Search</h1>
+</header>
+
+<div class="sticky-key">
+  <label style="margin:0; padding:0">API key:</label>
+  <input id="apiKey" placeholder="paste your key here" />
+  <span id="status">checking…</span>
+</div>
+
+<div class="wrap">
+
+  <div class="card">
+    <div class="row">
+      <div class="field">
+        <label>Name</label>
+        <input id="f_name" placeholder="e.g. Лапшакова">
+      </div>
+      <div class="field">
+        <label>Region</label>
+        <input id="f_region" placeholder="e.g. Чуйская">
+      </div>
+      <div class="field">
+        <label>City</label>
+        <input id="f_city" placeholder="e.g. Бишкек">
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <div class="field">
+        <label>Address</label>
+        <input id="f_address" placeholder="any part of address">
+      </div>
+      <div class="field">
+        <label>Date of birth (YYYY-MM-DD)</label>
+        <input id="f_dob" placeholder="1986-03-12">
+      </div>
+      <div class="field">
+        <label>Unique ID</label>
+        <input id="f_pid" placeholder="14 digits">
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px; align-items:center;">
+      <button onclick="search()">Search</button>
+      <button class="secondary" onclick="clearForm()">Clear</button>
+      <div style="flex:1"></div>
+      <label style="margin:0;font-size:12px">Per page:
+        <select id="limit" style="margin-left:6px;padding:6px;background:#0f172a;color:#e2e8f0;border:1px solid #334155;border-radius:6px">
+          <option>5</option><option selected>10</option><option>20</option><option>50</option><option>100</option>
+        </select>
+      </label>
+    </div>
+    <div class="examples">
+      <span class="ex" onclick="quick('city','Бишкек')">city: Бишкек</span>
+      <span class="ex" onclick="quick('region','Ысык')">region: Ысык</span>
+      <span class="ex" onclick="quick('address','Советская')">address: Советская</span>
+      <span class="ex" onclick="fillDoc('12031986372528')">id: 12031986372528</span>
+      <span class="ex" onclick="quick('dob','1986-03-12')">dob: 1986-03-12</span>
+    </div>
+  </div>
+
+  <div id="summary"></div>
+  <div id="results"></div>
+
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const fields = ["name","region","city","address","dob","pid"];
+
+// --- API key remembered between visits ---
+const saved = localStorage.getItem("apiKey");
+if (saved) $("#apiKey").value = saved;
+$("#apiKey").addEventListener("change", e => {
+  localStorage.setItem("apiKey", e.target.value.trim());
+  ping();
+});
+
+async function ping() {
+  const key = $("#apiKey").value.trim();
+  const st = $("#status");
+  if (!key) { st.textContent="no key"; st.className=""; return; }
+  try {
+    const r = await fetch("/api/search?limit=1", { headers: { "X-API-Key": key } });
+    st.textContent = r.ok ? "OK ✓" : (r.status + " ✗");
+    st.className = r.ok ? "ok" : "err";
+  } catch(e) { st.textContent="offline"; st.className="err"; }
+}
+
+async function search(page=1) {
+  const key = $("#apiKey").value.trim();
+  if (!key) return alert("Paste your API key first, in the box at top.");
+  localStorage.setItem("apiKey", key);
+
+  const params = new URLSearchParams();
+  for (const k of fields) {
+    const v = $("#f_"+k).value.trim();
+    if (v) params.set(k === "pid" ? "person_id" : k, v);
+  }
+  params.set("page", page);
+  params.set("limit", $("#limit").value);
+
+  const url = "/api/search?" + params.toString();
+  $("#summary").textContent = "searching…";
+  $("#results").innerHTML = "";
+  try {
+    const r = await fetch(url, { headers: { "X-API-Key": key } });
+    if (!r.ok) {
+      const t = await r.text();
+      $("#summary").innerHTML = `<span style="color:#f87171">Error ${r.status}</span>: ${t}`;
+      return;
+    }
+    const d = await r.json();
+    show(d, page);
+  } catch(e) {
+    $("#summary").textContent = "Network error: " + e;
+  }
+}
+
+function show(d, page) {
+  const totalPages = Math.max(1, Math.ceil(d.count / d.limit));
+  $("#summary").innerHTML =
+    `<b>${d.count.toLocaleString()}</b> match${d.count===1?"":"es"} • page ${d.page} of ${totalPages}` +
+    (d.count > d.limit
+      ? ` &nbsp; <button class="secondary" onclick="search(${page-1})" ${page<=1?"disabled":""}>‹ Prev</button> ` +
+        ` <button class="secondary" onclick="search(${page+1})" ${page>=totalPages?"disabled":""}>Next ›</button>`
+      : "");
+
+  if (!d.results.length) {
+    $("#results").innerHTML = '<div class="card" style="text-align:center;color:#94a3b8">No matches.</div>';
+    return;
+  }
+
+  $("#results").innerHTML = d.results.map(r => `
+    <div class="result">
+      <div class="pid">${r.person_id || ""}</div>
+      <div class="nm">${escapeHtml(r.name || "(no name)")}</div>
+      <div class="meta">
+        ${r.region ? `<span class="pill">${escapeHtml(r.region)}</span>` : ""}
+        ${r.city   ? `<span class="pill">${escapeHtml(r.city)}</span>`   : ""}
+        ${r.dob    ? `<span class="pill">${escapeHtml(r.dob)}</span>`    : ""}
+      </div>
+      ${r.address ? `<div class="meta" style="margin-top:6px">${escapeHtml(r.address)}</div>` : ""}
+      <details><summary>Show raw JSON</summary>
+        <pre>${escapeHtml(JSON.stringify(r, null, 2))}</pre>
+      </details>
+    </div>
+  `).join("");
+}
+
+function escapeHtml(s){ return String(s??'').replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+
+function clearForm() {
+  for (const k of fields) $("#f_"+k).value = "";
+  $("#summary").innerHTML = "";
+  $("#results").innerHTML = "";
+}
+
+function quick(field, val) {
+  const map = {city:"f_city", region:"f_region", dob:"f_dob"};
+  $("#"+map[field]).value = val;
+  search();
+}
+function fillDoc(pid) {
+  $("#f_pid").value = pid;
+  search();
+}
+
+ping();
+</script>
+
+</body>
+</html>

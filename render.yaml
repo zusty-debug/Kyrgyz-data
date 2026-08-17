@@ -1,0 +1,34 @@
+services:
+  - type: pserv
+    name: mock-data-db
+    plan: free
+    ipAllowList: []         # only the api service can reach it
+    # Postgres is provisioned by Render when type=pserv; just configure the db.
+    pgCredentials:
+      - name: mock-data-db
+        databaseName: mockdata
+        user: app
+  - type: web
+    name: mock-data-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromService:
+          type: pserv
+          name: mock-data-db
+          property: connectionString
+      - key: DATABASE_URL_PUBLIC
+        fromService:
+          type: pserv
+          name: mock-data-db
+          property: connectionString
+      - key: API_KEY
+        generateValue: true
+      - key: RATE_LIMIT_PER_MIN
+        value: 60
+      - key: DATA_URL
+        sync: false       # operator sets this manually in Render dashboard

@@ -1,0 +1,42 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: postgres_db
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-mockdata}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      # NOTE: In production, DO NOT expose this port publicly. Only the API should be public.
+      # This is mapped to the host here ONLY for local development inspection (e.g. using DBeaver/pgAdmin).
+      - "127.0.0.1:5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-user} -d ${POSTGRES_DB:-mockdata}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    container_name: fastapi_api
+    restart: always
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-user}:${POSTGRES_PASSWORD:-password}@db:5432/${POSTGRES_DB:-mockdata}
+      API_KEY: ${API_KEY:-dev-secret-key}
+      RATE_LIMIT_PER_MIN: ${RATE_LIMIT_PER_MIN:-60}
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount the data directory so the importer can access data.txt
+      # and the app can be developed without rebuilding constantly
+      - ./data:/app/data
+      - ./importer:/app/importer
+
+volumes:
+  postgres_data:

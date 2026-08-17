@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>Admin · People Search</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    margin: 0; padding: 0;
+    background: #0f172a; color: #e2e8f0;
+    min-height: 100vh;
+  }
+  header {
+    background: #1e293b; padding: 14px 16px;
+    border-bottom: 1px solid #334155;
+    display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; flex: 1; }
+  header a {
+    color: #93c5fd; text-decoration: none; font-size: 14px;
+    border: 1px solid #334155; padding: 6px 10px; border-radius: 8px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px; }
+  .card {
+    background: #1e293b; border: 1px solid #334155;
+    border-radius: 12px; padding: 16px; margin-bottom: 14px;
+  }
+  .card h2 { margin: 0 0 10px 0; font-size: 16px; font-weight: 600;}
+  label {
+    display: block; font-size: 12px; color: #94a3b8;
+    margin-bottom: 4px; text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  input[type=text], input[type=password] {
+    width: 100%; padding: 10px 12px;
+    background: #0f172a; color: #e2e8f0;
+    border: 1px solid #334155; border-radius: 8px;
+    font-size: 15px;
+  }
+  input[type=file] {
+    width: 100%; padding: 10px 12px; color: #e2e8f0;
+    background: #0f172a; border: 1px dashed #475569; border-radius: 8px;
+    font-size: 14px;
+  }
+  button {
+    background: #3b82f6; color: white; border: none;
+    padding: 11px 20px; border-radius: 8px; font-size: 15px;
+    font-weight: 500; cursor: pointer;
+  }
+  button.secondary { background: #475569; }
+  button.danger { background: #b91c1c; }
+  button:active { transform: translateY(1px); }
+  button[disabled] { opacity: 0.5; cursor: not-allowed; }
+  .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  .sticky-key {
+    position: sticky; top: 0; z-index: 10;
+    background: #0f172a; padding: 10px 16px;
+    border-bottom: 1px solid #1e293b;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .sticky-key input { flex: 1; font-size: 13px; padding: 8px; }
+  #status {
+    text-align: center; padding: 5px 10px; border-radius: 6px;
+    font-size: 12px; min-width: 80px;
+  }
+  #status.ok { background: #16a34a; }
+  #status.err { background: #dc2626; }
+  .stat-grid {
+    display: grid; grid-template-columns: 1fr 1fr; gap: 8px;
+  }
+  .stat {
+    background: #0f172a; padding: 10px; border-radius: 8px;
+    border: 1px solid #334155;
+  }
+  .stat .v { font-size: 22px; font-weight: 700; color: #f1f5f9; }
+  .stat .k { font-size: 11px; color: #94a3b8; text-transform: uppercase; letter-spacing: 0.5px; }
+  .pill {
+    display: inline-block; padding: 3px 10px; border-radius: 999px;
+    background: #334155; font-size: 11px; margin-right: 6px;
+  }
+  .pill.revoked { background: #7f1d1d; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  td, th { padding: 8px; text-align: left; border-bottom: 1px solid #334155; }
+  th { color: #94a3b8; font-weight: 500; font-size: 11px; text-transform: uppercase; }
+  code {
+    background: #020617; padding: 2px 6px; border-radius: 4px;
+    font-size: 12px; word-break: break-all;
+  }
+  pre {
+    background: #020617; padding: 10px; border-radius: 6px;
+    font-size: 11px; overflow: auto;
+  }
+  .progress { display:none; padding: 8px 0; color: #60a5fa; font-size: 13px; }
+  .progress.on { display:block; }
+  .err { color: #f87171; font-size: 13px; }
+</style>
+</head>
+<body>
+
+<header>
+  <span>⚙️</span>
+  <h1>Admin · People Search</h1>
+  <a href="/">Search page</a>
+</header>
+
+<div class="sticky-key">
+  <label style="margin:0; padding:0; font-size:12px">Master key:</label>
+  <input id="apiKey" type="password" placeholder="paste master key">
+  <span id="status">offline</span>
+</div>
+
+<div class="wrap">
+
+  <!-- Stats -->
+  <div class="card">
+    <h2>📊 Stats</h2>
+    <div class="stat-grid">
+      <div class="stat"><div class="v" id="s_people">–</div><div class="k">People</div></div>
+      <div class="stat"><div class="v" id="s_keys">–</div><div class="k">Active keys</div></div>
+      <div class="stat"><div class="v" id="s_imports">–</div><div class="k">Imports</div></div>
+      <div class="stat"><div class="v" id="s_last">–</div><div class="k">Last import</div></div>
+    </div>
+  </div>
+
+  <!-- Upload file -->
+  <div class="card">
+    <h2>📥 Add / update records (drop a TXT)</h2>
+    <p style="font-size:13px; color:#94a3b8; margin-top:0">
+      Pick the same TAB-separated .txt file you uploaded earlier. Records whose
+      unique ID already exists are skipped — re-importing the same file is safe.
+    </p>
+    <input type="file" id="fileInput" accept=".txt,.tsv">
+    <div class="progress" id="progress">⏳ Uploading & importing…</div>
+    <div class="row" style="margin-top:10px">
+      <button onclick="uploadFile()">Upload & import</button>
+      <button class="secondary" onclick="refreshImportLog()">Refresh</button>
+    </div>
+    <div id="uploadResult"></div>
+  </div>
+
+  <!-- API keys -->
+  <div class="card">
+    <h2>🔑 API keys</h2>
+    <p style="font-size:13px; color:#94a3b8; margin-top:0">
+      Master key is the one you set in <code>API_KEY</code> — it can never be revoked.
+      Issue more keys for apps/people and revoke anytime.
+    </p>
+    <div class="row">
+      <input type="text" id="keyLabel" placeholder="Label, e.g. Telegram bot" style="flex:1">
+      <button onclick="createKey()">Create key</button>
+    </div>
+    <div id="newKeyBox" style="margin-top:10px"></div>
+    <table style="margin-top:14px">
+      <thead><tr><th>Label</th><th>Prefix</th><th>Last used</th><th></th></tr></thead>
+      <tbody id="keysTable"></tbody>
+    </table>
+  </div>
+
+  <!-- Import history -->
+  <div class="card">
+    <h2>📜 Import history</h2>
+    <table>
+      <thead><tr><th>When</th><th>File</th><th>Imported</th><th>Skipped</th><th>Duration</th></tr></thead>
+      <tbody id="importsTable"></tbody>
+    </table>
+  </div>
+
+  <div class="card" style="font-size:13px; color:#94a3b8">
+    ⚠️ All admin endpoints require the <b>master</b> key. Per-user keys can only
+    search the API. Generate per-user keys above when needed.
+  </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+const h = (s) => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+const saved = localStorage.getItem("masterKey");
+if (saved) $("#apiKey").value = saved;
+$("#apiKey").addEventListener("change", e => localStorage.setItem("masterKey", e.target.value.trim()));
+
+function getKey() { return $("#apiKey").value.trim(); }
+
+async function api(path, opts = {}) {
+  const key = getKey();
+  if (!key) throw new Error("Master key is empty.");
+  const headers = { "X-API-Key": key, ...(opts.headers || {}) };
+  const r = await fetch(path, { ...opts, headers });
+  const body = await r.text();
+  let j; try { j = JSON.parse(body); } catch { j = body; }
+  if (!r.ok) throw new Error(typeof j === "string" ? `${r.status}: ${j}` : (j.detail || `${r.status}`));
+  return j;
+}
+
+async function ping() {
+  const st = $("#status");
+  if (!getKey()) { st.textContent="no key"; st.className=""; return; }
+  try {
+    const r = await api("/api/admin/stats");
+    st.textContent = "OK ✓"; st.className = "ok";
+    renderStats(r);
+    renderImportLog();
+    renderKeys();
+  } catch (e) { st.textContent = "✗"; st.className = "err"; }
+}
+
+function renderStats(r) {
+  $("#s_people").textContent  = (r.total_people ?? 0).toLocaleString();
+  $("#s_keys").textContent    = (r.active_keys ?? 0).toLocaleString();
+  $("#s_imports").textContent = (r.total_imports ?? 0).toLocaleString();
+  if (r.last_import) {
+    const dt = new Date(r.last_import.created_at + "Z");
+    $("#s_last").textContent = dt.toLocaleString();
+  } else {
+    $("#s_last").textContent = "—";
+  }
+}
+
+async function refreshStats() {
+  try { renderStats(await api("/api/admin/stats")); } catch(e) {$("#status").textContent = "✗"; $("#status").className="err";}
+}
+
+async function renderImportLog() {
+  try {
+    const r = await api("/api/admin/imports");
+    $("#importsTable").innerHTML = (r.imports || []).map(i => `
+      <tr>
+        <td>${new Date(i.created_at + "Z").toLocaleString()}</td>
+        <td>${h(i.filename)}<br><span class="pill">${h(i.source)}</span></td>
+        <td>${(i.imported ?? 0).toLocaleString()}</td>
+        <td>${(i.skipped ?? 0).toLocaleString()}</td>
+        <td>${i.duration_s ?? 0}s</td>
+      </tr>`).join("") || `<tr><td colspan="5" style="color:#94a3b8">No imports yet.</td></tr>`;
+  } catch(e) { /* ignore */ }
+}
+
+async function renderKeys() {
+  try {
+    const r = await api("/api/admin/keys");
+    $("#keysTable").innerHTML = (r.keys || []).map(k => `
+      <tr ${k.revoked ? 'style="opacity:0.5"' : ""}>
+        <td>${h(k.label)}${k.revoked?'<span class="pill revoked">revoked</span>':''}</td>
+        <td><code>${h(k.key_prefix)}</code></td>
+        <td>${k.last_used ? new Date(k.last_used+"Z").toLocaleString() : "—"}</td>
+        <td>${k.revoked ? "—" : `<button class="danger" onclick="revokeKey(${k.id})">Revoke</button>`}</td>
+      </tr>`).join("") || `<tr><td colspan="4" style="color:#94a3b8">No per-user keys yet.</td></tr>`;
+  } catch(e) { /* ignore */ }
+}
+
+async function createKey() {
+  const label = $("#keyLabel").value.trim();
+  try {
+    const k = await api("/api/admin/keys", {
+      method: "POST",
+      headers: {"Content-Type":"application/json"},
+      body: JSON.stringify({label}),
+    });
+    $("#newKeyBox").innerHTML = `
+      <div style="background:#14532d; padding:10px; border-radius:8px; margin-top:8px">
+        ✅ New key <b>${h(label||"")}</b> — copy now, won't be shown again:<br>
+        <code id="nk">${h(k.key)}</code>
+        <button class="secondary" style="margin-top:6px" onclick="navigator.clipboard.writeText('${k.key}')">Copy</button>
+      </div>`;
+    $("#keyLabel").value = "";
+    renderKeys(); refreshStats();
+  } catch(e) { $("#newKeyBox").innerHTML = `<div class="err">${h(e.message)}</div>`; }
+}
+
+async function revokeKey(id) {
+  if (!confirm("Revoke this key? Apps using it will lose access immediately.")) return;
+  try {
+    await api(`/api/admin/keys/${id}/revoke`, {method:"POST"});
+    renderKeys(); refreshStats();
+  } catch(e) { alert(e.message); }
+}
+
+async function uploadFile() {
+  const f = $("#fileInput").files[0];
+  if (!f) return alert("Pick a file first.");
+  const fd = new FormData();
+  fd.append("file", f);
+  $("#progress").classList.add("on");
+  $("#uploadResult").innerHTML = "";
+  try {
+    const r = await api("/api/admin/import", { method: "POST", body: fd });
+    $("#uploadResult").innerHTML = `
+      <div style="background:#14532d; padding:10px; border-radius:8px; margin-top:10px">
+        ✅ Imported <b>${r.imported.toLocaleString()}</b> rows
+        in <b>${r.duration_s}s</b>${r.skipped?` • skipped ${r.skipped}`:""}
+        <br><span style="color:#94a3b8; font-size:12px">${h(r.filename)}</span>
+      </div>`;
+    $("#fileInput").value = "";
+    refreshStats(); renderImportLog();
+  } catch(e) {
+    $("#uploadResult").innerHTML = `<div class="err">❌ ${h(e.message)}</div>`;
+  } finally {
+    $("#progress").classList.remove("on");
+  }
+}
+
+ping();
+</script>
+
+</body>
+</html>
