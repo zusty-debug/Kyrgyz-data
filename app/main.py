@@ -265,8 +265,8 @@ async def admin_import(
     """
     # --- safety check: file extension and size
     name = file.filename or "upload.txt"
-    if not name.lower().endswith((".txt", ".tsv")):
-        raise HTTPException(400, detail="Only .txt or .tsv files are accepted.")
+    if not name.lower().endswith((".txt", ".tsv", ".xlsx", ".xls")):
+        raise HTTPException(400, detail="Only .txt, .tsv, .xlsx, or .xls files are accepted.")
 
     # --- spill to a temp file, then to a permanent location
     _DATA_DIR.mkdir(parents=True, exist_ok=True)

@@ -128,10 +128,12 @@
   <div class="card">
     <h2>📥 Add / update records (drop a TXT)</h2>
     <p style="font-size:13px; color:#94a3b8; margin-top:0">
-      Pick the same TAB-separated .txt file you uploaded earlier. Records whose
-      unique ID already exists are skipped — re-importing the same file is safe.
+      Pick a <b>.txt</b> (TAB-separated), <b>.tsv</b>, or <b>.xlsx</b> file.
+      For .xlsx, the importer reads the header row and maps columns
+      (Name, Region, City, Address, ID, DOB). Records whose unique ID
+      already exists are skipped — re-importing the same file is safe.
     </p>
-    <input type="file" id="fileInput" accept=".txt,.tsv">
+    <input type="file" id="fileInput" accept=".txt,.tsv,.xlsx,.xls">
     <div class="progress" id="progress">⏳ Uploading & importing…</div>
     <div class="row" style="margin-top:10px">
       <button onclick="uploadFile()">Upload & import</button>

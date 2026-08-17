@@ -139,6 +139,118 @@ def iter_records(file_obj: io.TextIOBase) -> Iterator[List[str]]:
 
 
 # ---------------------------------------------------------------------------
+# XLSX support — openpyxl-based. Each spreadsheet row is converted to the same
+# list-of-strings shape that the TXT parser expects, so the rest of the pipeline
+# is unchanged.
+# ---------------------------------------------------------------------------
+
+# Mapping rules — case-insensitive substring matches against the header row.
+COLUMN_ALIASES = {
+    "name":      ("name", "фио", "ф.и.о", "имя"),
+    "region":    ("region", "область", "обл", "регион"),
+    "city":      ("city", "город", "нас.пункт", "населенный"),
+    "address":   ("address", "адрес", "улица"),
+    "person_id": ("person_id", "инн", "иин", "id"),
+    "dob":       ("dob", "дата рождения", "дата_рождения", "др", "birth", "рожд"),
+}
+
+
+def iter_xlsx_records(file_path: str) -> Iterator[List[str]]:
+    """
+    Reads an .xlsx file. The first non-empty row is treated as the header.
+    Columns are matched to canonical fields via COLUMN_ALIASES.
+
+    Yields each data row as a list of tokens in the canonical order
+        [name, region, city, address, person_id, dob_or_NULL]
+    so that the existing parse_record() works as if the row had arrived as
+    a tab-separated TXT line.
+    """
+    from datetime import date, datetime
+    try:
+        from openpyxl import load_workbook
+    except ImportError as e:
+        raise RuntimeError(
+            "openpyxl is not installed — add it to requirements.txt and rebuild."
+        ) from e
+
+    wb = load_workbook(file_path, read_only=True, data_only=True)
+    try:
+        for ws in wb.worksheets:
+            rows = list(ws.iter_rows(values_only=True))
+            if not rows:
+                continue
+
+            # Find header row: first row with at least 2 non-empty strings
+            header_idx = 0
+            for i, r in enumerate(rows[:5]):
+                if r and sum(1 for c in r if c is not None and str(c).strip()) >= 2:
+                    header_idx = i
+                    break
+            header = [
+                (str(c).strip().lower() if c is not None else "")
+                for c in rows[header_idx]
+            ]
+            col = {}
+            for i, h in enumerate(header):
+                if not h:
+                    continue
+                for canonical, aliases in COLUMN_ALIASES.items():
+                    if any(a in h for a in aliases):
+                        col.setdefault(canonical, i)
+
+            # Data rows after the header
+            for row in rows[header_idx + 1:]:
+                if not row or all(c is None or str(c).strip() == "" for c in row):
+                    continue
+
+                def _cell(key):
+                    if key not in col or col[key] >= len(row):
+                        return ""
+                    v = row[col[key]]
+                    if v is None:
+                        return ""
+                    if isinstance(v, (datetime, date)):
+                        return v.strftime("%Y-%m-%d")
+                    return str(v).strip()
+
+                # Adapt the city/region/dob into shapes the existing TXT parser
+                # understands:
+                #   city  -> if it's not already prefixed with "г.", prepend it
+                #   region -> if it doesn't already say "обл/район", append " обл."
+                #   dob   -> if it's an ISO "YYYY-MM-DD", expand to 3 separate tokens
+                #             so the parser's YYYY MM DD detection works.
+                city = _cell("city")
+                if city and not re.match(r"^\s*г\.?\s", city):
+                    city = f"г. {city}"
+                region = _cell("region")
+                if region and not any(k in region.lower() for k in ("обл", "район", "р-н", "р н", "рн")):
+                    region = region + " обл."
+
+                dob = _cell("dob")
+                dob_tokens = []
+                if dob and dob.upper() != "NULL":
+                    m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", dob)
+                    if m:
+                        dob_tokens = [m.group(1), m.group(2), m.group(3)]
+                    else:
+                        dob_tokens = [dob]
+                else:
+                    dob_tokens = ["NULL"]
+
+                tokens = [
+                    _cell("name"),
+                    region,
+                    city,
+                    _cell("address"),
+                    _cell("person_id"),
+                    *dob_tokens,
+                ]
+                yield tokens
+    finally:
+        wb.close()
+
+
+# ---------------------------------------------------------------------------
 def _split_name_location(tokens: List[str]) -> Tuple[List[str], List[str]]:
     if not tokens:
         return [], []
@@ -353,30 +465,40 @@ def run_import(
     os.makedirs(os.path.dirname(malformed_log) or ".", exist_ok=True)
     bad = open(malformed_log, "w", encoding="utf-8")
     try:
-        with io.open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-            for tokens in iter_records(fh):
-                rec = parse_record(tokens)
-                if not rec.is_valid():
-                    skipped += 1
-                    bad.write(rec.raw + "\n---\n")
-                    continue
-                batch.append(rec.to_row())
-                if len(batch) >= batch_size:
-                    n_new, n_already = flush(eng, batch)
-                    imported += n_new
-                    already += n_already
-                    batch.clear()
-                    processed = imported + already
-                    if processed // log_every > (processed - batch_size) // log_every:
-                        elapsed = time.time() - start
-                        rate = processed / max(elapsed, 0.001)
-                        print(f"  new={imported:,}  already={already:,}  "
-                              f"seen={processed:,}  "
-                              f"malformed={skipped:,}  rate={rate:,.0f}/s")
-            if batch:
+        ext = os.path.splitext(file_path)[1].lower()
+        if ext in (".xlsx", ".xls"):
+            token_iter = iter_xlsx_records(file_path)
+            _close_iter = None
+        else:
+            fh = io.open(file_path, "r", encoding="utf-8", errors="replace")
+            token_iter = iter_records(fh)
+            _close_iter = fh
+
+        for tokens in token_iter:
+            rec = parse_record(tokens)
+            if not rec.is_valid():
+                skipped += 1
+                bad.write(rec.raw + "\n---\n")
+                continue
+            batch.append(rec.to_row())
+            if len(batch) >= batch_size:
                 n_new, n_already = flush(eng, batch)
                 imported += n_new
                 already += n_already
+                batch.clear()
+                processed = imported + already
+                if processed // log_every > (processed - batch_size) // log_every:
+                    elapsed = time.time() - start
+                    rate = processed / max(elapsed, 0.001)
+                    print(f"  new={imported:,}  already={already:,}  "
+                          f"seen={processed:,}  "
+                          f"malformed={skipped:,}  rate={rate:,.0f}/s")
+        if batch:
+            n_new, n_already = flush(eng, batch)
+            imported += n_new
+            already += n_already
+        if _close_iter is not None:
+            _close_iter.close()
     finally:
         bad.close()
 
