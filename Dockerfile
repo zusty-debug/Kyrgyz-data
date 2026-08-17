@@ -7,16 +7,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Install Python deps first (cacheable layer)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY ./app /app/app
-COPY ./scripts /app/scripts
+# Copy the three code packages
+COPY ./app        /app/app
+COPY ./importer   /app/importer
+COPY ./scripts    /app/scripts
 
 # Make sure the start script is executable
 RUN chmod +x /app/scripts/start.sh && ls -la /app/scripts/start.sh
 
-# Pre-create data directory
+# Pre-create data directory for the downloaded TXT
 RUN mkdir -p /app/data
 
 EXPOSE 8000
