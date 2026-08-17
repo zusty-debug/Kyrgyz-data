@@ -6,3 +6,5 @@ pydantic==2.6.4
 slowapi==0.1.9
 python-multipart==0.0.9
 openpyxl==3.1.2
+python-telegram-bot==20.7
+requests==2.31.0

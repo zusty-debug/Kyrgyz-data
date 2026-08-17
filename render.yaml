@@ -21,3 +21,30 @@ services:
         value: 60
       - key: DATA_URL
         value: https://files.catbox.moe/d1ktyc.txt
+
+  - type: worker
+    name: kyrgyz-tg-bot
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    startCommand: bash /app/scripts/start_bot.sh
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kyrgyz-data-db
+          property: connectionString
+      - key: API_URL
+        value: https://kyrgyz-data-api.onrender.com
+      - key: API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: OWNER_TELEGRAM_ID
+        sync: false
+      - key: DEV_HANDLE
+        value: "@xzusty"
+      - key: DAILY_QUOTA
+        value: 5
+      - key: PER_PAGE
+        value: 5
