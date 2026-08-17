@@ -210,11 +210,19 @@ def parse_record(tokens: List[str]) -> ParsedRecord:
 # Flush strategies
 # ---------------------------------------------------------------------------
 def _flush_copy(engine, batch) -> int:
-    """PG COPY FROM STDIN. Uses psycopg2's copy_expert."""
+    """PG COPY FROM STDIN. Uses psycopg2's copy_expert.
+
+    NOTE: The engine may have statement_timeout set (to protect user search
+    queries). We override it for THIS connection only so the bulk COPY isn't
+    killed mid-import. The connection is closed after the import, so user
+    queries on subsequent connections still get the timeout.
+    """
     import psycopg2
     raw_conn = engine.raw_connection()
     try:
         with raw_conn.cursor() as cur:
+            # Disable the per-statement timeout for this connection.
+            cur.execute("SET statement_timeout = 0")
             buf = io.StringIO()
             for row in batch:
                 cells = []
