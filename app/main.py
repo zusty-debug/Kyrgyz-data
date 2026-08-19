@@ -28,7 +28,7 @@ import sys
 PROJECT_ROOT = pathlib.Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
-from app.database import get_db
+from app.database import engine, get_db
 from app.models import Person, APIKey, ImportLog
 from app.auth import (
     MASTER_KEY, identify_key,
