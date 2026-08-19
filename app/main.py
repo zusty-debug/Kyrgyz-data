@@ -314,25 +314,22 @@ async def admin_import(
 # ---------------------------------------------------------------------------
 # Backup: single-shot CSV download of every record
 
-@app.get("/api/admin/download-csv", tags=["Admin"])
-def download_csv(db: Session = Depends(get_db), auth=Depends(require_master_key)):
+def _csv_stream(db: Session):
     """
-    Streams all `people` rows as a CSV file the user can save from the
-    browser. Headers row is included so the file round-trips back into
-    /api/admin/import without translation.
+    Real streaming CSV generator.  Yields small text chunks per row so the
+    response never needs to hold the whole 879k records in memory at once.
     """
-    output = io.StringIO()
-    writer = csv.writer(output)
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+
+    # Header
     writer.writerow(["id", "person_id", "name", "region", "city", "address", "dob"])
+    yield buf.getvalue()
+    buf.seek(0)
+    buf.truncate(0)
 
-    # Use a server-side cursor so we don't materialise 879k rows in memory
-    # at once. `stream_results=True` is honoured by psycopg2's async
-    # cursor and SQLite can fall back to .iter() below.
-    query = db.query(Person).order_by(Person.id)
-    iterator = getattr(query, "yield_per", None)
-    rows = query.yield_per(5000) if iterator is not None else query.all()
-
-    for person in rows:
+    # Stream the data
+    for person in db.query(Person).order_by(Person.id).yield_per(1000):
         writer.writerow([
             person.id,
             person.person_id,
@@ -342,14 +339,27 @@ def download_csv(db: Session = Depends(get_db), auth=Depends(require_master_key)
             person.address,
             person.dob.isoformat() if person.dob else None,
         ])
+        buf.seek(0)
+        yield buf.getvalue()
+        buf.truncate(0)
 
-    output.seek(0)
 
+@app.get("/api/admin/download-csv", tags=["Admin"])
+def download_csv(db: Session = Depends(get_db), auth=Depends(require_master_key)):
+    """
+    Streams ALL `people` rows as a CSV file the user can save from the
+    browser.  Uses a generator — never materialises the whole ~80 MB CSV
+    in memory, so Render free-tier (512 MB) doesn't OOM.
+    """
     headers = {
         "Content-Disposition": 'attachment; filename="all_people.csv"',
         "Content-Type": "text/csv; charset=utf-8",
     }
-    return StreamingResponse(iter([output.getvalue()]), headers=headers)
+    return StreamingResponse(
+        _csv_stream(db),
+        headers=headers,
+        media_type="text/csv; charset=utf-8",
+    )
 
 
 # ---------------------------------------------------------------------------
