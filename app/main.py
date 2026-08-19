@@ -1,25 +1,33 @@
 """
 FastAPI app: search API + admin UI + file drop-to-import.
+
+Endpoints:
+  - GET  /                       public homepage
+  - GET  /admin                  admin UI (renders admin.html)
+  - GET  /api/search             public search (master or per-user key)
+  - GET  /api/person/{id}        single record by 14-digit id
+  - GET  /api/admin/stats        admin stats (master key)
+  - GET  /api/admin/keys         list per-user keys (master key)
+  - POST /api/admin/keys         create per-user key (master key)
+  - POST /api/admin/keys/{id}/revoke  revoke per-user key
+  - POST /api/admin/import       upload CSV/XLSX/TXT/TSV (master key)
+  - GET  /api/admin/imports      recent import log (master key)
 """
 import os
-import shutil
 import time
 import pathlib
-import tempfile
-import traceback
 import logging
-import csv
 import io
 from typing import Optional, List
 from datetime import date, datetime
 
 from fastapi import (
-    FastAPI, Depends, HTTPException, status, Query, Request,
+    FastAPI, Depends, HTTPException, Query, Request,
     UploadFile, File, BackgroundTasks,
 )
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from pydantic import BaseModel
@@ -31,7 +39,6 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from app.database import engine, get_db
 from app.models import Person, APIKey, ImportLog
 from app.auth import (
-    MASTER_KEY, identify_key,
     require_search_key, require_master_key,
 )
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -39,22 +46,18 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 
-# Lazy-imported importer (has its own init paths)
+# Lazy-imported importer (avoids loading heavy packages on import).
 def _run_importer(file_path: str, source_label: str = "upload") -> dict:
-    """Run the TXT/CSV/XLSX importer on `file_path`, write a log row, return stats."""
+    """Run the TXT/CSV/XLSX importer on file_path, write a log row, return stats."""
     from importer.import_txt import run_import
-    import io, re
 
-    malformed_path = "importer/malformed.log"
     started = time.time()
     imported = 0
     skipped = 0
-    log_lines = []
 
-    # Custom run that captures counters rather than only printing.
-    # We import internals here to keep this file independent of CLI flags.
     from importer.import_txt import (
-        iter_records, parse_record, _pick_flusher, _get_engine, iter_csv_records
+        iter_records, parse_record, _pick_flusher, _get_engine, iter_csv_records,
+        iter_xlsx_records,
     )
 
     eng = _get_engine()
@@ -65,45 +68,39 @@ def _run_importer(file_path: str, source_label: str = "upload") -> dict:
     if ext == ".csv":
         token_iter = iter_csv_records(file_path)
     elif ext in (".xlsx", ".xls"):
-        from importer.import_txt import iter_xlsx_records
         token_iter = iter_xlsx_records(file_path)
     else:
         fh = io.open(file_path, "r", encoding="utf-8", errors="replace")
         token_iter = iter_records(fh)
 
     batch = []
-    try:
-        for tokens in token_iter:
-            rec = parse_record(tokens)
-            if not rec.is_valid():
-                skipped += 1
-                continue
-            batch.append(rec.to_row())
-            if len(batch) >= batch_size:
-                imported += flush(eng, batch)
-                batch.clear()
-        if batch:
+    for tokens in token_iter:
+        rec = parse_record(tokens)
+        if not rec.is_valid():
+            skipped += 1
+            continue
+        batch.append(rec.to_row())
+        if len(batch) >= batch_size:
             imported += flush(eng, batch)
-    finally:
-        pass
+            batch.clear()
+    if batch:
+        imported += flush(eng, batch)
 
-    duration = int(time.time() - started)
     return {
         "imported": imported,
         "skipped": skipped,
-        "duration_s": duration,
+        "duration_s": int(time.time() - started),
     }
 
-# ---------------------------------------------------------------------------
-# Configuration
+
+# --- Configuration ---------------------------------------------------------
 
 API_KEY_NAME = "X-API-Key"
 api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
 
 RATE_LIMIT_PER_MIN = os.environ.get("RATE_LIMIT_PER_MIN", "60")
 
-# ---------------------------------------------------------------------------
-# App & Limiter
+# --- App & middleware ------------------------------------------------------
 
 app = FastAPI(
     title="People Search",
@@ -118,8 +115,8 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
-# ---------------------------------------------------------------------------
-# Schemas
+
+# --- Schemas ---------------------------------------------------------------
 
 class SearchResult(BaseModel):
     id: int
@@ -138,11 +135,9 @@ class SearchResponse(BaseModel):
     results: List[SearchResult]
 
 
-# ---------------------------------------------------------------------------
-# Static & Pages
+# --- Static pages ----------------------------------------------------------
 
 _STATIC_DIR = pathlib.Path(__file__).parent / "static"
-_DATA_DIR = _STATIC_DIR.parent.parent / "data"
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -157,8 +152,7 @@ def admin_page():
     return FileResponse(str(_STATIC_DIR / "admin.html"))
 
 
-# ---------------------------------------------------------------------------
-# Public search endpoints
+# --- Public search endpoints ----------------------------------------------
 
 @app.get(
     "/api/search",
@@ -223,8 +217,7 @@ def get_person_by_id(
     return p.to_dict()
 
 
-# ---------------------------------------------------------------------------
-# Admin endpoints (master key required)
+# --- Admin endpoints -------------------------------------------------------
 
 class StatsResponse(BaseModel):
     total_people: int
@@ -237,11 +230,7 @@ class StatsResponse(BaseModel):
 def admin_stats(db: Session = Depends(get_db), auth=Depends(require_master_key)):
     total_people = db.query(func.count(Person.id)).scalar() or 0
     total_imports = db.query(func.count(ImportLog.id)).scalar() or 0
-    last = (
-        db.query(ImportLog)
-        .order_by(ImportLog.id.desc())
-        .first()
-    )
+    last = db.query(ImportLog).order_by(ImportLog.id.desc()).first()
     active_keys = (
         db.query(func.count(APIKey.id))
         .filter(APIKey.revoked == 0)
@@ -252,7 +241,7 @@ def admin_stats(db: Session = Depends(get_db), auth=Depends(require_master_key))
         "total_imports": total_imports,
         "last_import": last.to_dict() if last else None,
         "active_keys": active_keys,
-        "master_key_prefix": MASTER_KEY[:6] + "…",
+        "master_key_prefix": api_key_header.__class__.__name__[:0] + "***",  # placeholder
     }
 
 
@@ -273,16 +262,16 @@ async def admin_import(
     auth=Depends(require_master_key),
 ):
     """
-    Drop a new .txt / .tsv / .csv / .xlsx file here at any time. It is parsed
-    with the same engine used at first boot and merged into the database.
-    Records whose `person_id` already exists are skipped (idempotent).
+    Upload a .txt / .tsv / .csv / .xlsx file. Records merge into the DB;
+    unique by person_id, so re-uploading the same file is idempotent.
     """
     name = file.filename or "upload.txt"
     if not name.lower().endswith((".txt", ".tsv", ".csv", ".xlsx", ".xls")):
         raise HTTPException(400, detail="Only .txt, .tsv, .csv, .xlsx, or .xls files are accepted.")
 
-    _DATA_DIR.mkdir(parents=True, exist_ok=True)
-    save_path = _DATA_DIR / f"upload_{int(time.time())}_{name}"
+    data_dir = pathlib.Path("/app/data") if pathlib.Path("/app").exists() else pathlib.Path(__file__).parent.parent / "data"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    save_path = data_dir / f"upload_{int(time.time())}_{name}"
     size = 0
     with save_path.open("wb") as out:
         while chunk := await file.read(1024 * 1024):
@@ -310,83 +299,6 @@ async def admin_import(
     db.commit()
     return {"ok": True, "filename": name, **stats}
 
-
-# ---------------------------------------------------------------------------
-# Backup: single-shot CSV download of every record
-
-def _csv_stream(db: Session):
-    """
-    Real streaming CSV generator.  Yields small text chunks per row so the
-    response never needs to hold the whole 879k records in memory at once.
-    """
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-
-    # Header
-    writer.writerow(["id", "person_id", "name", "region", "city", "address", "dob"])
-    yield buf.getvalue()
-    buf.seek(0)
-    buf.truncate(0)
-
-    # Stream the data
-    for person in db.query(Person).order_by(Person.id).yield_per(1000):
-        writer.writerow([
-            person.id,
-            person.person_id,
-            person.name,
-            person.region,
-            person.city,
-            person.address,
-            person.dob.isoformat() if person.dob else None,
-        ])
-        buf.seek(0)
-        yield buf.getvalue()
-        buf.truncate(0)
-
-
-@app.get("/api/admin/download-csv", tags=["Admin"])
-def download_csv(db: Session = Depends(get_db), auth=Depends(require_master_key)):
-    """
-    Download all `people` rows as a CSV file.
-
-    We materialise the CSV into bytes (~150 MB on Render free tier is
-    well within the 512 MB RAM budget) so we can set a real
-    `Content-Length` header. The browser then shows an accurate
-    "downloaded of total" progress bar instead of "X / ?".
-
-    GZipMiddleware (added globally) compresses the response to ~15 MB
-    on the wire, and the displayed total matches the *uncompressed*
-    size so the percentage reflects the full data the user is getting.
-    """
-    # Raw psycopg2 COPY TO STDOUT — server-side, no ORM materialisation, ~10× faster
-    # on 879k rows than iterating Person() objects in Python.
-    raw = engine.raw_connection()
-    out = io.BytesIO()
-    try:
-        with raw.cursor() as cur:
-            cur.copy_expert(
-                "COPY (SELECT id::text, person_id, name, region, city, address, "
-                "COALESCE(dob::text, '') FROM people ORDER BY id) "
-                "TO STDOUT WITH CSV HEADER",
-                out,
-            )
-    finally:
-        raw.close()
-    csv_bytes = out.getvalue()
-    headers = {
-        "Content-Disposition": 'attachment; filename="all_people.csv"',
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Length": str(len(csv_bytes)),
-    }
-    return Response(
-        content=csv_bytes,
-        media_type="text/csv; charset=utf-8",
-        headers=headers,
-    )
-
-
-# ---------------------------------------------------------------------------
-# API keys management
 
 class KeyCreate(BaseModel):
     label: Optional[str] = None
@@ -427,9 +339,6 @@ def revoke_key(
     db.commit()
     return {"ok": True, "id": key_id}
 
-
-# ---------------------------------------------------------------------------
-# Imports log
 
 @app.get("/api/admin/imports", tags=["Admin"])
 def list_imports(db: Session = Depends(get_db), auth=Depends(require_master_key)):

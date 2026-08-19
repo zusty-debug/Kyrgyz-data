@@ -139,24 +139,8 @@
       <button onclick="uploadFile()">Upload & import</button>
       <button class="secondary" onclick="refreshImportLog()">Refresh</button>
       <div style="flex:1"></div>
-      <button class="secondary" onclick="downloadCsv()">⬇ Download all data (CSV)</button>
     </div>
     <div id="uploadResult"></div>
-  </div>
-
-  <!-- Backup -->
-  <div class="card">
-    <h2>💾 Backup</h2>
-    <p style="font-size:13px; color:#94a3b8; margin-top:0">
-      Download every record as a single CSV file from
-      <code>/api/admin/download-csv</code>. Keep this file on your phone so
-      you can restore everything by uploading it back later (Render free
-      databases expire after 90 days).
-    </p>
-    <div class="row">
-      <button onclick="downloadCsv()">⬇ Download all data (CSV)</button>
-      <div style="flex:1"></div>
-    </div>
   </div>
 
   <!-- API keys -->
@@ -317,19 +301,6 @@ async function uploadFile() {
   } finally {
     $("#progress").classList.remove("on");
   }
-}
-
-function downloadCsv() {
-  // Hand the URL (with api_key query param) to a new tab via window.open.
-  // The endpoint streams the CSV as a generator (so Render's free-tier
-  // 512 MB RAM doesn't OOM with the 879k-row dataset) AND sends
-  // Content-Disposition: attachment so the browser does a native
-  // download instead of rendering JSON. This is the most reliable path
-  // for mobile Chrome — programmatic blob-URL downloads are flaky.
-  const key = getKey();
-  if (!key) { alert('Paste master key first.'); return; }
-  const url = '/api/admin/download-csv?api_key=' + encodeURIComponent(key);
-  window.open(url, '_blank');
 }
 
 ping();
