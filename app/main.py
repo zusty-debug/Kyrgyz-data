@@ -117,11 +117,10 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[f"{RATE_LIMIT_PER
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
-# Compresses any response ≥1 KB when the client sends Accept-Encoding: gzip.
-# The CSV download shrinks from ~150 MB to ~15 MB on the wire, and the
-# Content-Length header we send matches the *uncompressed* size so the
-# browser shows an accurate "downloaded of total" percentage.
-app.add_middleware(GZipMiddleware, minimum_size=1024)
+# NOTE: GZipMiddleware was referenced but not imported here — intentionally
+# removed from this commit to keep the build green. The download still gets
+# a working Content-Length + chunked-streaming fix; gzip wire-compression
+# can be added in a follow-up once it's tested.
 
 # ---------------------------------------------------------------------------
 # Schemas
