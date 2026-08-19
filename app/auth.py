@@ -7,13 +7,17 @@ Two kinds of keys:
 
 `require_search_key` is for /api/search and /api/person/... — accepts both.
 `require_master_key` is for admin endpoints — master only.
+
+Both deps accept the key via the X-API-Key HEADER or the `api_key` /
+`X-API-Key` QUERY PARAMETER so URL-triggered flows (e.g. CSV download from
+a web UI button) Just Work without needing programmatic blob plumbing.
 """
 import os
 import hmac
 from datetime import datetime
 from typing import Optional
 
-from fastapi import Depends, Header, HTTPException, status
+from fastapi import Depends, Header, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
 from .database import get_db
@@ -24,6 +28,16 @@ MASTER_KEY = os.environ.get("API_KEY", "dev-secret-key").strip()
 
 def _ct_eq(a: str, b: str) -> bool:
     return hmac.compare_digest(a.encode("utf-8"), b.encode("utf-8"))
+
+
+def _pick_supplied(request: Request, header_value: Optional[str]) -> Optional[str]:
+    """Header first, then ?api_key=, then ?X-API-Key=."""
+    if header_value:
+        return header_value
+    return (
+        request.query_params.get("api_key")
+        or request.query_params.get("X-API-Key")
+    )
 
 
 def identify_key(db: Session, supplied: Optional[str]):
@@ -49,11 +63,13 @@ def identify_key(db: Session, supplied: Optional[str]):
 
 
 async def require_search_key(
+    request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     db: Session = Depends(get_db),
 ):
     """Auth for /api/search and /api/person/... (master OR user)."""
-    kind, row = identify_key(db, x_api_key)
+    supplied = _pick_supplied(request, x_api_key)
+    kind, row = identify_key(db, supplied)
     if kind is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -64,14 +80,17 @@ async def require_search_key(
 
 
 async def require_master_key(
+    request: Request,
     x_api_key: Optional[str] = Header(default=None, alias="X-API-Key"),
     db: Session = Depends(get_db),
 ):
     """Auth for /api/admin/* (master only)."""
-    kind, row = identify_key(db, x_api_key)
+    supplied = _pick_supplied(request, x_api_key)
+    kind, row = identify_key(db, supplied)
     if kind != "master":
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Master API key required for this action.",
         )
     return {"kind": kind, "row": row}
+
