@@ -319,11 +319,30 @@ async function uploadFile() {
   }
 }
 
-function downloadCsv() {
-  // Pop the master key into query string (URL parameters survive the
-  // navigation), then open the download URL in a new tab.
-  const url = "/api/admin/download-csv?X-API-Key=" + encodeURIComponent(getKey());
-  window.open(url, "_blank");
+async function downloadCsv() {
+  // FastAPI's require_master_key reads X-API-Key from HTTP headers only,
+  // not from query strings — so we have to use fetch() with an explicit
+  // header. After we get the CSV bytes, we turn them into a blob URL and
+  // trigger a download by clicking an <a download> element.
+  const key = getKey();
+  if (!key) { alert('Paste master key first.'); return; }
+  try {
+    const r = await fetch('/api/admin/download-csv', {
+      headers: { 'X-API-Key': key },
+    });
+    if (!r.ok) throw new Error(r.status + ' ' + await r.text());
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'all_people.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    alert('Download failed: ' + e.message);
+  }
 }
 
 ping();
