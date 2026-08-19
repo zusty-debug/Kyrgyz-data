@@ -1,5 +1,5 @@
 """
-Streaming TXT -> DB importer for the mock data API.
+Streaming TXT/CSV/XLSX -> DB importer for the mock data API.
 
 v2 — format-aware, validated against real records:
   - TAB-separated fields
@@ -17,7 +17,7 @@ Flush strategy:
   * MySQL would fall back too; detection is by url prefix.
 
 Usage:
-    python -m importer.import_txt --file data/data.txt --flush auto
+    python -m importer.import_txt --file data/data.csv --flush auto
 """
 from __future__ import annotations
 
@@ -60,6 +60,18 @@ PATRONYMIC_SUFFIXES = (
 )
 
 # ---------------------------------------------------------------------------
+# Column-alias rules — case-insensitive substring matches against the
+# header row used by both CSV and XLSX readers.
+COLUMN_ALIASES = {
+    "name":      ("name", "фио", "ф.и.о", "имя"),
+    "region":    ("region", "область", "обл", "регион"),
+    "city":      ("city", "город", "нас.пункт", "населенный"),
+    "address":   ("address", "адрес", "улица"),
+    "person_id": ("person_id", "инн", "иин", "id"),
+    "dob":       ("dob", "дата рождения", "дата_рождения", "др", "birth", "рожд"),
+}
+
+
 @dataclass
 class ParsedRecord:
     person_id: str
@@ -67,7 +79,7 @@ class ParsedRecord:
     region: Optional[str] = None
     city: Optional[str] = None
     address: Optional[str] = None
-    dob: Optional[str] = None  # ISO or None
+    dob: Optional[str] = None
     raw: str = ""
 
     def is_valid(self) -> bool:
@@ -139,22 +151,95 @@ def iter_records(file_obj: io.TextIOBase) -> Iterator[List[str]]:
 
 
 # ---------------------------------------------------------------------------
-# XLSX support — openpyxl-based. Each spreadsheet row is converted to the same
-# list-of-strings shape that the TXT parser expects, so the rest of the pipeline
-# is unchanged.
+# CSV support — generic. Matches headers or reads positionally if no header.
 # ---------------------------------------------------------------------------
+def iter_csv_records(file_path: str) -> Iterator[List[str]]:
+    """
+    Reads a CSV file. The first non-empty row is treated as the header.
+    Columns are matched to canonical fields via COLUMN_ALIASES.
 
-# Mapping rules — case-insensitive substring matches against the header row.
-COLUMN_ALIASES = {
-    "name":      ("name", "фио", "ф.и.о", "имя"),
-    "region":    ("region", "область", "обл", "регион"),
-    "city":      ("city", "город", "нас.пункт", "населенный"),
-    "address":   ("address", "адрес", "улица"),
-    "person_id": ("person_id", "инн", "иин", "id"),
-    "dob":       ("dob", "дата рождения", "дата_рождения", "др", "birth", "рожд"),
-}
+    Yields each data row as a list of tokens in the canonical order
+        [name, region, city, address, person_id, dob_or_NULL]
+    so that the existing parse_record() works as if the row had arrived as
+    a tab-separated TXT line.
+    """
+    import csv
+    from datetime import date, datetime
+
+    with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+        reader = csv.reader(f)
+        rows = list(reader)
+        if not rows:
+            return
+
+        # Find header row: first row with at least 2 non-empty strings
+        header_idx = 0
+        for i, r in enumerate(rows[:5]):
+            if r and sum(1 for c in r if c is not None and str(c).strip()) >= 2:
+                header_idx = i
+                break
+
+        header = [
+            (str(c).strip().lower() if c is not None else "")
+            for c in rows[header_idx]
+        ]
+        col = {}
+        for i, h in enumerate(header):
+            if not h:
+                continue
+            for canonical, aliases in COLUMN_ALIASES.items():
+                if any(a in h for a in aliases):
+                    col.setdefault(canonical, i)
+
+        # Data rows after the header
+        for row in rows[header_idx + 1:]:
+            if not row or all(c is None or str(c).strip() == "" for c in row):
+                continue
+
+            def _cell(key, _row=row):
+                if key not in col or col[key] >= len(_row):
+                    return ""
+                v = _row[col[key]]
+                if v is None:
+                    return ""
+                if isinstance(v, (datetime, date)):
+                    return v.strftime("%Y-%m-%d")
+                return str(v).strip()
+
+            # Adapt the city/region/dob into shapes the existing TXT parser
+            # understands.
+            city = _cell("city")
+            if city and not re.match(r"^\s*г\.?\s", city):
+                city = f"г. {city}"
+            region = _cell("region")
+            if region and not any(k in region.lower() for k in ("обл", "район", "р-н", "р н", "рн")):
+                region = region + " обл."
+
+            dob = _cell("dob")
+            dob_tokens = []
+            if dob and dob.upper() != "NULL":
+                m = re.match(r"^(\d{4})-(\d{2})-(\d{2})$", dob)
+                if m:
+                    dob_tokens = [m.group(1), m.group(2), m.group(3)]
+                else:
+                    dob_tokens = [dob]
+            else:
+                dob_tokens = ["NULL"]
+
+            tokens = [
+                _cell("name"),
+                region,
+                city,
+                _cell("address"),
+                _cell("person_id"),
+                *dob_tokens,
+            ]
+            yield tokens
 
 
+# ---------------------------------------------------------------------------
+# XLSX support — openpyxl-based
+# ---------------------------------------------------------------------------
 def iter_xlsx_records(file_path: str) -> Iterator[List[str]]:
     """
     Reads an .xlsx file. The first non-empty row is treated as the header.
@@ -180,7 +265,6 @@ def iter_xlsx_records(file_path: str) -> Iterator[List[str]]:
             if not rows:
                 continue
 
-            # Find header row: first row with at least 2 non-empty strings
             header_idx = 0
             for i, r in enumerate(rows[:5]):
                 if r and sum(1 for c in r if c is not None and str(c).strip()) >= 2:
@@ -198,27 +282,20 @@ def iter_xlsx_records(file_path: str) -> Iterator[List[str]]:
                     if any(a in h for a in aliases):
                         col.setdefault(canonical, i)
 
-            # Data rows after the header
             for row in rows[header_idx + 1:]:
                 if not row or all(c is None or str(c).strip() == "" for c in row):
                     continue
 
-                def _cell(key):
-                    if key not in col or col[key] >= len(row):
+                def _cell(key, _row=row):
+                    if key not in col or col[key] >= len(_row):
                         return ""
-                    v = row[col[key]]
+                    v = _row[col[key]]
                     if v is None:
                         return ""
                     if isinstance(v, (datetime, date)):
                         return v.strftime("%Y-%m-%d")
                     return str(v).strip()
 
-                # Adapt the city/region/dob into shapes the existing TXT parser
-                # understands:
-                #   city  -> if it's not already prefixed with "г.", prepend it
-                #   region -> if it doesn't already say "обл/район", append " обл."
-                #   dob   -> if it's an ISO "YYYY-MM-DD", expand to 3 separate tokens
-                #             so the parser's YYYY MM DD detection works.
                 city = _cell("city")
                 if city and not re.match(r"^\s*г\.?\s", city):
                     city = f"г. {city}"
@@ -322,9 +399,7 @@ def parse_record(tokens: List[str]) -> ParsedRecord:
 # Flush strategies
 # ---------------------------------------------------------------------------
 def _flush_copy(engine, batch) -> Tuple[int, int]:
-    """
-    PG bulk insert. Returns (new_rows, already_present_rows).
-    """
+    """PG bulk insert with staging table + ON CONFLICT. Returns (new, already)."""
     import psycopg2
     raw_conn = engine.raw_connection()
     try:
@@ -360,7 +435,6 @@ def _flush_copy(engine, batch) -> Tuple[int, int]:
                 "FROM STDIN WITH (FORMAT text, NULL '\\N')",
                 buf,
             )
-            # Get counts: how many rows from staging are NEW vs already in people.
             cur.execute(
                 """
                 WITH src AS (
@@ -390,8 +464,6 @@ def _flush_copy(engine, batch) -> Tuple[int, int]:
 def _flush_sqlite(engine, batch) -> int:
     """SQLite bulk insert. Uses INSERT OR IGNORE for idempotence."""
     import sqlite3
-    # SQLAlchemy's sqlite engine works but for speed we drop to the raw
-    # sqlite3 driver and use executemany.
     raw = engine.raw_connection()
     try:
         cur = raw.cursor()
@@ -466,7 +538,10 @@ def run_import(
     bad = open(malformed_log, "w", encoding="utf-8")
     try:
         ext = os.path.splitext(file_path)[1].lower()
-        if ext in (".xlsx", ".xls"):
+        if ext == ".csv":
+            token_iter = iter_csv_records(file_path)
+            _close_iter = None
+        elif ext in (".xlsx", ".xls"):
             token_iter = iter_xlsx_records(file_path)
             _close_iter = None
         else:

@@ -126,20 +126,37 @@
 
   <!-- Upload file -->
   <div class="card">
-    <h2>📥 Add / update records (drop a TXT)</h2>
+    <h2>📥 Add / update records (drop a file)</h2>
     <p style="font-size:13px; color:#94a3b8; margin-top:0">
-      Pick a <b>.txt</b> (TAB-separated), <b>.tsv</b>, or <b>.xlsx</b> file.
-      For .xlsx, the importer reads the header row and maps columns
+      Pick a <b>.txt</b> (TAB-separated), <b>.tsv</b>, <b>.csv</b>, or <b>.xlsx</b> file.
+      For .xlsx/.csv, the importer reads the header row and maps columns
       (Name, Region, City, Address, ID, DOB). Records whose unique ID
       already exists are skipped — re-importing the same file is safe.
     </p>
-    <input type="file" id="fileInput" accept=".txt,.tsv,.xlsx,.xls">
+    <input type="file" id="fileInput" accept=".txt,.tsv,.csv,.xlsx,.xls">
     <div class="progress" id="progress">⏳ Uploading & importing…</div>
     <div class="row" style="margin-top:10px">
       <button onclick="uploadFile()">Upload & import</button>
       <button class="secondary" onclick="refreshImportLog()">Refresh</button>
+      <div style="flex:1"></div>
+      <button class="secondary" onclick="downloadCsv()">⬇ Download all data (CSV)</button>
     </div>
     <div id="uploadResult"></div>
+  </div>
+
+  <!-- Backup -->
+  <div class="card">
+    <h2>💾 Backup</h2>
+    <p style="font-size:13px; color:#94a3b8; margin-top:0">
+      Download every record as a single CSV file from
+      <code>/api/admin/download-csv</code>. Keep this file on your phone so
+      you can restore everything by uploading it back later (Render free
+      databases expire after 90 days).
+    </p>
+    <div class="row">
+      <button onclick="downloadCsv()">⬇ Download all data (CSV)</button>
+      <div style="flex:1"></div>
+    </div>
   </div>
 
   <!-- API keys -->
@@ -300,6 +317,13 @@ async function uploadFile() {
   } finally {
     $("#progress").classList.remove("on");
   }
+}
+
+function downloadCsv() {
+  // Pop the master key into query string (URL parameters survive the
+  // navigation), then open the download URL in a new tab.
+  const url = "/api/admin/download-csv?X-API-Key=" + encodeURIComponent(getKey());
+  window.open(url, "_blank");
 }
 
 ping();

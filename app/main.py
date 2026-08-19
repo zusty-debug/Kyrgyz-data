@@ -8,6 +8,8 @@ import pathlib
 import tempfile
 import traceback
 import logging
+import csv
+import io
 from typing import Optional, List
 from datetime import date, datetime
 
@@ -17,7 +19,7 @@ from fastapi import (
 )
 from fastapi.security import APIKeyHeader
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, func
 from pydantic import BaseModel
@@ -39,7 +41,7 @@ from slowapi.middleware import SlowAPIMiddleware
 
 # Lazy-imported importer (has its own init paths)
 def _run_importer(file_path: str, source_label: str = "upload") -> dict:
-    """Run the TXT importer on `file_path`, write a log row, return stats."""
+    """Run the TXT/CSV/XLSX importer on `file_path`, write a log row, return stats."""
     from importer.import_txt import run_import
     import io, re
 
@@ -52,16 +54,26 @@ def _run_importer(file_path: str, source_label: str = "upload") -> dict:
     # Custom run that captures counters rather than only printing.
     # We import internals here to keep this file independent of CLI flags.
     from importer.import_txt import (
-        iter_records, parse_record, _pick_flusher, _get_engine
+        iter_records, parse_record, _pick_flusher, _get_engine, iter_csv_records
     )
 
     eng = _get_engine()
     flush = _pick_flusher(eng, "auto")
     batch_size = 5000
 
+    ext = os.path.splitext(file_path)[1].lower()
+    if ext == ".csv":
+        token_iter = iter_csv_records(file_path)
+    elif ext in (".xlsx", ".xls"):
+        from importer.import_txt import iter_xlsx_records
+        token_iter = iter_xlsx_records(file_path)
+    else:
+        fh = io.open(file_path, "r", encoding="utf-8", errors="replace")
+        token_iter = iter_records(fh)
+
     batch = []
-    with io.open(file_path, "r", encoding="utf-8", errors="replace") as fh:
-        for tokens in iter_records(fh):
+    try:
+        for tokens in token_iter:
             rec = parse_record(tokens)
             if not rec.is_valid():
                 skipped += 1
@@ -72,6 +84,8 @@ def _run_importer(file_path: str, source_label: str = "upload") -> dict:
                 batch.clear()
         if batch:
             imported += flush(eng, batch)
+    finally:
+        pass
 
     duration = int(time.time() - started)
     return {
@@ -259,16 +273,14 @@ async def admin_import(
     auth=Depends(require_master_key),
 ):
     """
-    Drop a new .txt file here at any time. It is parsed with the same
-    TAB-aware parser used at first boot and merged into the database.
+    Drop a new .txt / .tsv / .csv / .xlsx file here at any time. It is parsed
+    with the same engine used at first boot and merged into the database.
     Records whose `person_id` already exists are skipped (idempotent).
     """
-    # --- safety check: file extension and size
     name = file.filename or "upload.txt"
-    if not name.lower().endswith((".txt", ".tsv", ".xlsx", ".xls")):
-        raise HTTPException(400, detail="Only .txt, .tsv, .xlsx, or .xls files are accepted.")
+    if not name.lower().endswith((".txt", ".tsv", ".csv", ".xlsx", ".xls")):
+        raise HTTPException(400, detail="Only .txt, .tsv, .csv, .xlsx, or .xls files are accepted.")
 
-    # --- spill to a temp file, then to a permanent location
     _DATA_DIR.mkdir(parents=True, exist_ok=True)
     save_path = _DATA_DIR / f"upload_{int(time.time())}_{name}"
     size = 0
@@ -276,13 +288,11 @@ async def admin_import(
         while chunk := await file.read(1024 * 1024):
             out.write(chunk)
             size += len(chunk)
-            # hard cap 200 MB per upload
             if size > 200 * 1024 * 1024:
                 out.close()
                 save_path.unlink(missing_ok=True)
                 raise HTTPException(413, detail="File too large (200 MB cap).")
 
-    # --- run importer
     try:
         stats = _run_importer(str(save_path), source_label="upload")
     except Exception as e:
@@ -301,7 +311,49 @@ async def admin_import(
     return {"ok": True, "filename": name, **stats}
 
 
-# --- API keys management ---
+# ---------------------------------------------------------------------------
+# Backup: single-shot CSV download of every record
+
+@app.get("/api/admin/download-csv", tags=["Admin"])
+def download_csv(db: Session = Depends(get_db), auth=Depends(require_master_key)):
+    """
+    Streams all `people` rows as a CSV file the user can save from the
+    browser. Headers row is included so the file round-trips back into
+    /api/admin/import without translation.
+    """
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["id", "person_id", "name", "region", "city", "address", "dob"])
+
+    # Use a server-side cursor so we don't materialise 879k rows in memory
+    # at once. `stream_results=True` is honoured by psycopg2's async
+    # cursor and SQLite can fall back to .iter() below.
+    query = db.query(Person).order_by(Person.id)
+    iterator = getattr(query, "yield_per", None)
+    rows = query.yield_per(5000) if iterator is not None else query.all()
+
+    for person in rows:
+        writer.writerow([
+            person.id,
+            person.person_id,
+            person.name,
+            person.region,
+            person.city,
+            person.address,
+            person.dob.isoformat() if person.dob else None,
+        ])
+
+    output.seek(0)
+
+    headers = {
+        "Content-Disposition": 'attachment; filename="all_people.csv"',
+        "Content-Type": "text/csv; charset=utf-8",
+    }
+    return StreamingResponse(iter([output.getvalue()]), headers=headers)
+
+
+# ---------------------------------------------------------------------------
+# API keys management
 
 class KeyCreate(BaseModel):
     label: Optional[str] = None
@@ -343,7 +395,8 @@ def revoke_key(
     return {"ok": True, "id": key_id}
 
 
-# --- imports log ---
+# ---------------------------------------------------------------------------
+# Imports log
 
 @app.get("/api/admin/imports", tags=["Admin"])
 def list_imports(db: Session = Depends(get_db), auth=Depends(require_master_key)):
